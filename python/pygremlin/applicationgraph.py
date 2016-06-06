@@ -1,25 +1,24 @@
 # coding=utf-8
-from collections import defaultdict
 import networkx as nx
+
 
 class ApplicationGraph(object):
     """Represent the topology of an application to be tested by Gremlin"""
 
     def __init__(self, model=None, debug=False):
         """
-        @param dependency graph of microservices with some details
+        @param model: dependency graph of microservices with some details
         {
-          "services" : [
-	   { "name": "gateway", "service_proxies": ["127.0.0.1:9877"] },
-	   { "name": "productpage", "service_proxies": ["127.0.0.1:9876"] },
-	   { "name": "reviews"},
-	   { "name": "details"}
-          ],
-
-          "dependencies" : {
-	  "gateway" : ["productpage"],
-          "productpage" : ["reviews", "details"]
-         }
+            "services" : [
+                { "name": "gateway", "service_proxies": ["127.0.0.1:9877"] },
+                { "name": "productpage", "service_proxies": ["127.0.0.1:9876"] },
+                { "name": "reviews"},
+                { "name": "details"}
+            ],
+            "dependencies" : {
+                "gateway" : ["productpage"],
+                "productpage" : ["reviews", "details"]
+            }
         }
         """
 
@@ -66,7 +65,7 @@ class ApplicationGraph(object):
         if 'instances' in self._graph.node[service]:
             return self._graph.node[service]['instances']
         else:
-            #print("No instances for service {}".format(service))
+            # print("No instances for service {}".format(service))
             return []
 
     def _get_networkX(self):

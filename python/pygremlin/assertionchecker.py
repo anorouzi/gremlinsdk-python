@@ -8,8 +8,9 @@ from collections import defaultdict, namedtuple
 
 import isodate
 from elasticsearch import Elasticsearch
-
 from six import iteritems
+
+from pygremlin.logger import logger, configure_debug
 
 GremlinTestResult = namedtuple('GremlinTestResult', ['success', 'errormsg'])
 AssertionResult = namedtuple('AssertionResult',
@@ -124,6 +125,8 @@ class AssertionChecker(object):
             'circuit_breaker': self.check_circuit_breaker,
             'at_most_requests': self.check_at_most_requests
         }
+        if debug:
+            configure_debug()
 
     @staticmethod
     def _check_non_zero_results(data):
@@ -179,7 +182,8 @@ class AssertionChecker(object):
         return GremlinTestResult(False, data)
 
     def check_bounded_response_time(self, **kwargs):
-        assert 'source' in kwargs and 'dest' in kwargs and 'max_latency' in kwargs
+        assert 'source' in kwargs and 'dest' in kwargs \
+               and 'max_latency' in kwargs
         dest = kwargs['dest']
         source = kwargs['source']
         max_latency = _parse_duration(kwargs['max_latency'])
@@ -261,9 +265,11 @@ class AssertionChecker(object):
                 result = False
         return GremlinTestResult(result, errormsg)
 
-    ## check if the interaction between a given pair of services resulted in the required response status
+    # check if the interaction between a given pair of services resulted in
+    # the required response status
     def check_http_status(self, **kwargs):
-        assert 'source' in kwargs and 'dest' in kwargs and 'status' in kwargs and 'req_id' in kwargs
+        assert 'source' in kwargs and 'dest' in kwargs and 'status' in kwargs \
+               and 'req_id' in kwargs
         source = kwargs['source']
         dest = kwargs['dest']
         status = kwargs['status']
@@ -364,8 +370,7 @@ class AssertionChecker(object):
                     source, dest, num_requests, bucket['doc_count'] - 1,
                     bucket['key'])
                 result = False
-                if self.debug:
-                    print errormsg
+                logger.debug(errormsg)
                 return GremlinTestResult(result, errormsg)
         return GremlinTestResult(result, errormsg)
 
@@ -378,8 +383,8 @@ class AssertionChecker(object):
         errdelta = kwargs.pop('errdelta', datetime.timedelta(milliseconds=10))
         by_uri = kwargs.pop('by_uri', False)
 
-        if self.debug:
-            print 'in bounded retries (%s, %s, %s)' % (source, dest, retries)
+        logger.debug('in bounded retries (%s, %s, %s)'
+                     % (source, dest, retries))
 
         data = self._es.search(body={
             "size": max_query_results,
@@ -426,8 +431,7 @@ class AssertionChecker(object):
                     source, dest, retries, bucket['doc_count'] - 1,
                     bucket['key'])
                 result = False
-                if self.debug:
-                    print errormsg
+                logger.debug(errormsg)
                 return GremlinTestResult(result, errormsg)
         if wait_time is None:
             return GremlinTestResult(result, errormsg)
@@ -444,18 +448,20 @@ class AssertionChecker(object):
                     req_seq[i + 1]['_source']["ts"]) - isodate.parse_datetime(
                     req_seq[i]['_source']["ts"])
                 if not (((wait_time - errdelta) <= observed) or (
-                    observed <= (wait_time + errdelta))):
-                    errormsg = "{} -> {} - expected {}+/-{}ms spacing for retry attempt {}, but request {} had a spacing of {}ms".format(
-                        source, dest, wait_time, errdelta.microseconds / 1000,
-                                                 i + 1, req_id,
-                                                 observed.microseconds / 1000)
+                            observed <= (wait_time + errdelta))):
+                    errormsg = "{} -> {} - expected {}+/-{}ms spacing for" \
+                               " retry attempt {}, but request {} had a" \
+                               " spacing of {}ms" \
+                        .format(source, dest, wait_time,
+                                errdelta.microseconds / 1000, i + 1, req_id,
+                                observed.microseconds / 1000)
                     result = False
-                    if self.debug:
-                        print errormsg
+                    logger.debug(errormsg)
                     break
         return GremlinTestResult(result, errormsg)
 
-    def _compute_request_rate(self, requests):
+    @staticmethod
+    def _compute_request_rate(requests):
         """
         Compute the rate of requests given a sequence of them
         :param requests:
@@ -465,7 +471,7 @@ class AssertionChecker(object):
         times.sort()
         return (times[-1] - [times[0]]) / len(times)
 
-    def check_bulkhead(self, source, threshold, **kwargs):
+    def check_bulkhead(self, source, **kwargs):
         """
         Check that the service *source* implments a bulkhead pattern.
         This is accomplished by
@@ -520,10 +526,11 @@ class AssertionChecker(object):
                                          'below others'.format(dst))
         return GremlinTestResult(True, "")
 
-
-    def check_circuit_breaker(self,
-                              **kwargs):  # dest, closed_attempts, reset_time, halfopen_attempts):
-        assert 'dest' in kwargs and 'source' in kwargs and 'closed_attempts' in kwargs and 'reset_time' in kwargs and 'headerprefix' in kwargs
+    def check_circuit_breaker(self, **kwargs):
+        # dest, closed_attempts, reset_time, halfopen_attempts):
+        assert 'dest' in kwargs and 'source' in kwargs and \
+               'closed_attempts' in kwargs and 'reset_time' in kwargs \
+               and 'headerprefix' in kwargs
 
         dest = kwargs['dest']
         source = kwargs['source']
@@ -586,7 +593,7 @@ class AssertionChecker(object):
             failures = 0
             circuit_open_ts = None
             successes = 0
-            print "starting " + circuit_mode
+            logger.info("starting " + circuit_mode)
             for req in req_seq:
                 if circuit_mode is "open":  # circuit_open_ts is not None:
                     req_spacing = isodate.parse_datetime(
@@ -595,27 +602,26 @@ class AssertionChecker(object):
                     if req_spacing >= reset_time:
                         circuit_open_ts = None
                         circuit_mode = "half-open"
-                        print "%d: open -> half-open" % (failures + 1)
+                        logger.info("%d: open -> half-open" % (failures + 1))
                         failures = 0  # -1
                     else:  # We are in open state
                         # this is an assertion fail, no requests in open state
                         if req['_source']["msg"] == "Request":
-                            print "%d: open -> failure" % (failures + 1)
-                            if self.debug:
-                                print "Service %s failed to trip circuit breaker" % source
-                            errormsg = "{} -> {} - new request was issued at ({}s) before reset_timer ({}s)expired".format(
-                                source,
-                                dest,
-                                req_spacing,
-                                reset_time)  # req['_source'])
+                            logger.info("%d: open -> failure" % (failures + 1))
+                            # if self.debug:
+                            logger.debug("Service %s failed to trip "
+                                         "circuit breaker" % source)
+                            errormsg = "{} -> {} - new request was issued at " \
+                                       "({}s) before reset_timer ({}s)expired"\
+                                .format(source, dest, req_spacing, reset_time) # req['_source'])
                             result = False
                             break
                 if circuit_mode is "half-open":
                     if ((req['_source']["msg"] == "Response" and req['_source'][
                         "status"] != 200)
                         or (req['_source']["msg"] == "Request" and (
-                            "abort" in req['_source']["actions"]))):
-                        print "half-open -> open"
+                                    "abort" in req['_source']["actions"]))):
+                        logger.info("half-open -> open")
                         circuit_mode = "open"
                         circuit_open_ts = isodate.parse_datetime(
                             req['_source']["ts"])
@@ -623,10 +629,10 @@ class AssertionChecker(object):
                     elif (req['_source']["msg"] == "Response" and
                                   req['_source']["status"] == 200):
                         successes += 1
-                        print "half-open -> half-open (%d)" % successes
+                        logger.info("half-open -> half-open (%d)" % successes)
                         # If over threshold, return to closed state
                         if successes > halfopen_attempts:
-                            print "half-open -> closed"
+                            logger.info("half-open -> closed")
                             circuit_mode = "closed"
                             failures = 0
                             circuit_open_ts = None
@@ -638,11 +644,11 @@ class AssertionChecker(object):
                             req['_source']["actions"]) > 0)):
                         # Increment failures
                         failures += 1
-                        print "%d: closed->closed" % failures
+                        logger.info("%d: closed->closed" % failures)
                         # print(failures)
                         # Trip CB, go to open state
                         if failures > closed_attempts:
-                            print "%d: closed->open" % failures
+                            logger.info("%d: closed->open" % failures)
                             circuit_open_ts = isodate.parse_datetime(
                                 req['_source']["ts"])
                             successes = 0
@@ -659,7 +665,7 @@ class AssertionChecker(object):
         assert name is not None and name in self.functiondict
         gremlin_test_result = self.functiondict[name](**kwargs)
         if self.debug and not gremlin_test_result.success:
-            print gremlin_test_result.errormsg
+            logger.debug(gremlin_test_result.errormsg)
 
         return AssertionResult(name, str(kwargs), gremlin_test_result.success,
                                gremlin_test_result.errormsg)
